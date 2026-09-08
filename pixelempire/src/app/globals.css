@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+/*
+  PixelEmpire's palette is the map's palette: the page is the same deep space
+  the unreleased world sits in, founding land is the one warm colour, and
+  claimed territory glows. Keeping the UI and the canvas on one set of tokens is
+  what makes the product read as a place rather than a dashboard.
+*/
+@theme {
+  --color-void: #07080f;
+  --color-abyss: #0b0d18;
+  --color-surface: #111423;
+  --color-surface-2: #171b2e;
+  --color-edge: #232842;
+  --color-edge-bright: #333a5e;
+
+  --color-ink: #f2f4ff;
+  --color-ink-soft: #a8aecb;
+  --color-ink-faint: #6a7196;
+
+  /* Founding land — the only warm colour in the system. */
+  --color-gold: #f5b53d;
+  --color-gold-soft: #f9d38b;
+  --color-gold-deep: #8a5f14;
+
+  --color-claimed: #6f7bff;
+  --color-claimed-soft: #a2abff;
+  --color-locked: #ff8a5c;
+  --color-danger: #ff5c7a;
+  --color-good: #3ddc97;
+
+  --font-display: "Georgia", "Iowan Old Style", "Times New Roman", serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* A faint star-field wash so the page and the unreleased map share a texture. */
+.bg-deepspace {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(111, 123, 255, 0.16), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 85% 15%, rgba(245, 181, 61, 0.08), transparent 55%),
+    var(--color-void);
+}
+
+.panel {
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  border: 1px solid var(--color-edge);
+  backdrop-filter: blur(12px);
+}
+
+.hairline {
+  border-color: var(--color-edge);
+}
+
+/* Focus ring that survives the dark palette. */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-gold);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The canvas owns its gestures; the browser must not steal the pan. */
+.map-surface {
+  touch-action: none;
+  cursor: grab;
+}
+.map-surface[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+@keyframes pulse-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.98);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+.pulse-ring {
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-surface-2);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: shimmer 1.6s infinite;
+}

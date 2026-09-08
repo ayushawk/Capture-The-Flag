@@ -1,0 +1,289 @@
+// PixelEmpire V1 schema.
+//
+// Ownership model: current ownership lives directly on `plots`. There is no
+// redundant `territories` table. `ownership_history` is append-only and keeps
+// the full record; at most one row per plot may be open (ended_at IS NULL).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(uuid()) @db.Uuid
+  email       String   @unique
+  displayName String?  @map("display_name")
+  xUsername   String?  @map("x_username")
+  websiteUrl  String?  @map("website_url")
+  bio         String?
+  avatarUrl   String?  @map("avatar_url")
+  isAdmin     Boolean  @default(false) @map("is_admin")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  empire            Empire?
+  plots             Plot[]
+  purchases         Purchase[]
+  plotLocks         PlotLock[]
+  ownershipHistory  OwnershipHistory[]
+  sessions          Session[]
+  activityEvents    ActivityEvent[]
+
+  @@map("users")
+}
+
+/// V1: exactly one primary empire per user, enforced by the unique FK below.
+model Empire {
+  id          String   @id @default(uuid()) @db.Uuid
+  ownerUserId String   @unique @map("owner_user_id") @db.Uuid
+  name        String
+  slug        String   @unique
+  description String?
+  xUsername   String?  @map("x_username")
+  websiteUrl  String?  @map("website_url")
+  avatarUrl   String?  @map("avatar_url")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  owner            User               @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  plots            Plot[]
+  ownershipHistory OwnershipHistory[]
+  activityEvents   ActivityEvent[]
+
+  @@map("empires")
+}
+
+/// status: unreleased | available | locked | owned | disabled
+/// tier:   founding | standard | premium | event | sponsored (V1 uses founding/standard)
+model Plot {
+  id            String    @id @default(uuid()) @db.Uuid
+  gridX         Int       @map("grid_x")
+  gridY         Int       @map("grid_y")
+  pixelWidth    Int       @default(10) @map("pixel_width")
+  pixelHeight   Int       @default(10) @map("pixel_height")
+  status        String
+  tier          String
+  ownerUserId   String?   @map("owner_user_id") @db.Uuid
+  ownerEmpireId String?   @map("owner_empire_id") @db.Uuid
+  ownedAt       DateTime? @map("owned_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  ownerUser        User?              @relation(fields: [ownerUserId], references: [id])
+  ownerEmpire      Empire?            @relation(fields: [ownerEmpireId], references: [id])
+  purchases        Purchase[]
+  locks            PlotLock[]
+  ownershipHistory OwnershipHistory[]
+  activityEvents   ActivityEvent[]
+
+  @@unique([gridX, gridY])
+  @@index([status])
+  @@index([ownerEmpireId])
+  @@index([tier, status])
+  @@map("plots")
+}
+
+/// Append-only. Never deleted, never rewritten.
+/// acquisition_type: purchase | admin_transfer   (future: conquest)
+model OwnershipHistory {
+  id              String    @id @default(uuid()) @db.Uuid
+  plotId          String    @map("plot_id") @db.Uuid
+  ownerUserId     String    @map("owner_user_id") @db.Uuid
+  ownerEmpireId   String    @map("owner_empire_id") @db.Uuid
+  acquisitionType String    @map("acquisition_type")
+  purchaseId      String?   @map("purchase_id") @db.Uuid
+  startedAt       DateTime  @map("started_at") @db.Timestamptz(6)
+  endedAt         DateTime? @map("ended_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  plot        Plot      @relation(fields: [plotId], references: [id])
+  ownerUser   User      @relation(fields: [ownerUserId], references: [id])
+  ownerEmpire Empire    @relation(fields: [ownerEmpireId], references: [id])
+  purchase    Purchase? @relation(fields: [purchaseId], references: [id])
+
+  @@index([plotId, startedAt])
+  @@index([ownerEmpireId])
+  @@map("ownership_history")
+}
+
+/// One user's attempt to acquire one plot under one pricing rule.
+/// status: pending | completed | cancelled | expired | refunded
+model Purchase {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  plotId        String    @map("plot_id") @db.Uuid
+  pricingRuleId String    @map("pricing_rule_id") @db.Uuid
+  amountMinor   BigInt    @map("amount_minor")
+  currency      String
+  status        String
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(6)
+  completedAt   DateTime? @map("completed_at") @db.Timestamptz(6)
+
+  user             User               @relation(fields: [userId], references: [id])
+  plot             Plot               @relation(fields: [plotId], references: [id])
+  pricingRule      PricingRule        @relation(fields: [pricingRuleId], references: [id])
+  payments         Payment[]
+  locks            PlotLock[]
+  ownershipHistory OwnershipHistory[]
+  exceptions       PaymentException[]
+
+  @@index([userId, status])
+  @@index([plotId, status])
+  @@index([status, expiresAt])
+  @@map("purchases")
+}
+
+/// One provider payment attempt. A purchase may have many.
+/// Payment state and purchase state are intentionally independent.
+/// status: created | pending | paid | failed | refunded
+model Payment {
+  id                String   @id @default(uuid()) @db.Uuid
+  purchaseId        String   @map("purchase_id") @db.Uuid
+  provider          String
+  providerOrderId   String?  @map("provider_order_id")
+  providerPaymentId String?  @map("provider_payment_id")
+  providerEventId   String?  @map("provider_event_id")
+  amountMinor       BigInt   @map("amount_minor")
+  currency          String
+  status            String
+  providerPayload   Json?    @map("provider_payload")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  purchase   Purchase           @relation(fields: [purchaseId], references: [id])
+  exceptions PaymentException[]
+
+  @@index([purchaseId, status])
+  @@index([providerOrderId])
+  @@map("payments")
+}
+
+/// At most one ACTIVE lock per plot (released_at IS NULL) — enforced by a
+/// partial unique index created in the migration.
+model PlotLock {
+  id         String    @id @default(uuid()) @db.Uuid
+  plotId     String    @map("plot_id") @db.Uuid
+  purchaseId String    @map("purchase_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  lockedAt   DateTime  @map("locked_at") @db.Timestamptz(6)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  releasedAt DateTime? @map("released_at") @db.Timestamptz(6)
+
+  plot     Plot     @relation(fields: [plotId], references: [id])
+  purchase Purchase @relation(fields: [purchaseId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@index([expiresAt, releasedAt])
+  @@index([purchaseId])
+  @@map("plot_locks")
+}
+
+model PricingRule {
+  id             String    @id @default(uuid()) @db.Uuid
+  name           String
+  tier           String
+  priceMinor     BigInt    @map("price_minor")
+  currency       String
+  inventoryLimit Int?      @map("inventory_limit")
+  isActive       Boolean   @map("is_active")
+  startsAt       DateTime? @map("starts_at") @db.Timestamptz(6)
+  endsAt         DateTime? @map("ends_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  purchases Purchase[]
+
+  @@index([tier, isActive])
+  @@map("pricing_rules")
+}
+
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("platform_settings")
+}
+
+/// event_type: territory_claimed | empire_created
+model ActivityEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventType String   @map("event_type")
+  userId    String?  @map("user_id") @db.Uuid
+  empireId  String?  @map("empire_id") @db.Uuid
+  plotId    String?  @map("plot_id") @db.Uuid
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user   User?   @relation(fields: [userId], references: [id])
+  empire Empire? @relation(fields: [empireId], references: [id])
+  plot   Plot?   @relation(fields: [plotId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@map("activity_events")
+}
+
+/// A paid transaction that could not be turned into ownership (late payment on
+/// an already-owned plot, duplicate success on a completed purchase, amount or
+/// signature mismatch...). Operators resolve these out of band; the row is the
+/// audit trail required by §16 and §24.
+model PaymentException {
+  id         String    @id @default(uuid()) @db.Uuid
+  purchaseId String?   @map("purchase_id") @db.Uuid
+  paymentId  String?   @map("payment_id") @db.Uuid
+  reason     String
+  detail     Json?
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  purchase Purchase? @relation(fields: [purchaseId], references: [id])
+  payment  Payment?  @relation(fields: [paymentId], references: [id])
+
+  @@index([resolvedAt, createdAt])
+  @@map("payment_exceptions")
+}
+
+/// Raw provider webhook deliveries. `providerEventId` is unique, which makes
+/// duplicate delivery a no-op at the storage layer.
+model WebhookEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  provider        String
+  providerEventId String    @map("provider_event_id")
+  eventType       String    @map("event_type")
+  payload         Json
+  processedAt     DateTime? @map("processed_at") @db.Timestamptz(6)
+  error           String?
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([provider, providerEventId])
+  @@map("webhook_events")
+}
+
+model LoginToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  email      String
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([email, createdAt])
+  @@map("login_tokens")
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
